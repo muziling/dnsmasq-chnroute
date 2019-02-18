@@ -22,7 +22,7 @@ no-resolv
 all-servers
 server=114.114.114.114,0
 server=8.8.8.8,1
-chnroute-file=/root/chnroute.txt
+chnroutes-file=/root/chnroute.txt
 
 server with ",0" is polluted dns, only accept ip in chnroute.
 server with ",1" is clean dns, only accept ip not in chnroute.
