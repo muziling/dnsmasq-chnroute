@@ -1,39 +1,14 @@
-From 5b11e5ee250d2dde6a4df1805d67bade764fab64 Mon Sep 17 00:00:00 2001
-From: Hao Dong <halbertdong@gmail.com>
-Date: Tue, 5 Feb 2019 10:44:28 +0800
-Subject: [PATCH] Add feature to support chnroutes accelerating.
-
-This patch enable dnsmasq to accelerate resolving speed while
-users are in China. It's tiny and efficient with a single
-chnroutes file, which is retrived and updated independently.
-
-Configure Example:
-
-no-resolv
-all-servers
-server=114.114.114.114,0
-server=8.8.8.8,1
-chnroute-file=/tmp/chnroutes.txt
-
-server with ",0" is polluted dns, only accept ip in chnroute.
-server with ",1" is clean dns, only accept ip not in chnroute.
-
-The author of this patch is muziling.
-Hao Dong backported it to fit dnsmasq 2.80.
-
-Signed-off-by: Hao Dong <halbertdong@gmail.com>
----
- src/dnsmasq.h | 17 ++++++++--
- src/forward.c |  9 +++++-
- src/option.c  | 89 ++++++++++++++++++++++++++++++++++++++++++++++++---
- src/rfc1035.c | 41 +++++++++++++++++++++++-
- 4 files changed, 147 insertions(+), 9 deletions(-)
+ src/dnsmasq.h | 17 ++++++++++--
+ src/forward.c |  9 ++++++-
+ src/option.c  | 87 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++---
+ src/rfc1035.c | 41 +++++++++++++++++++++++++++-
+ 4 files changed, 146 insertions(+), 8 deletions(-)
 
 diff --git a/src/dnsmasq.h b/src/dnsmasq.h
-index f53e9a5..27e3129 100644
+index 68e6287..464f487 100644
 --- a/src/dnsmasq.h
 +++ b/src/dnsmasq.h
-@@ -548,6 +548,7 @@ struct server {
+@@ -553,6 +553,7 @@ struct server {
    unsigned int queries, failed_queries;
  #ifdef HAVE_LOOP
    u32 uid;
@@ -41,24 +16,24 @@ index f53e9a5..27e3129 100644
  #endif
    struct server *next; 
  };
-@@ -983,6 +984,16 @@ struct dhcp_relay {
+@@ -990,6 +991,16 @@ struct dhcp_relay {
    struct dhcp_relay *current, *next;
  };
  
-+struct net_mask_t {
-+  struct in_addr net;
-+  in_addr_t mask;
-+};
-+
-+struct net_list_t {
-+  int entries;
-+  struct net_mask_t *nets;
-+};
-+
++ struct net_mask_t {
++   struct in_addr net;
++   in_addr_t mask;
++ };
++ 
++ struct net_list_t {
++   int entries;
++   struct net_mask_t *nets;
++ };
++ 
  extern struct daemon {
    /* datastuctures representing the command-line and 
       config file arguments. All set (including defaults)
-@@ -1016,6 +1027,7 @@ extern struct daemon {
+@@ -1023,6 +1034,7 @@ extern struct daemon {
    char *lease_change_command;
    struct iname *if_names, *if_addrs, *if_except, *dhcp_except, *auth_peers, *tftp_interfaces;
    struct bogus_addr *bogus_addr, *ignore_addr;
@@ -66,7 +41,7 @@ index f53e9a5..27e3129 100644
    struct server *servers;
    struct ipsets *ipsets;
    int log_fac; /* log facility */
-@@ -1204,7 +1216,7 @@ size_t answer_request(struct dns_header *header, char *limit, size_t qlen,
+@@ -1216,7 +1228,7 @@ size_t answer_request(struct dns_header *header, char *limit, size_t qlen,
  		      time_t now, int ad_reqd, int do_bit, int have_pseudoheader);
  int check_for_bogus_wildcard(struct dns_header *header, size_t qlen, char *name, 
  			     struct bogus_addr *baddr, time_t now);
@@ -75,7 +50,7 @@ index f53e9a5..27e3129 100644
  int check_for_local_domain(char *name, time_t now);
  unsigned int questions_crc(struct dns_header *header, size_t plen, char *name);
  size_t resize_packet(struct dns_header *header, size_t plen, 
-@@ -1305,8 +1317,9 @@ void set_option_bool(unsigned int opt);
+@@ -1315,8 +1327,9 @@ void set_option_bool(unsigned int opt);
  void reset_option_bool(unsigned int opt);
  struct hostsfile *expand_filelist(struct hostsfile *list);
  char *parse_server(char *arg, union mysockaddr *addr, 
@@ -87,10 +62,10 @@ index f53e9a5..27e3129 100644
  /* forward.c */
  void reply_query(int fd, int family, time_t now);
 diff --git a/src/forward.c b/src/forward.c
-index 3dd8633..a8ab151 100644
+index fde554d..4daa324 100644
 --- a/src/forward.c
 +++ b/src/forward.c
-@@ -833,9 +833,16 @@ void reply_query(int fd, int family, time_t now)
+@@ -819,9 +819,16 @@ void reply_query(int fd, int family, time_t now)
    daemon->log_source_addr = &forward->source;
    
    if (daemon->ignore_addr && RCODE(header) == NOERROR &&
@@ -98,21 +73,21 @@ index 3dd8633..a8ab151 100644
 +      check_for_ignored_address(header, n, daemon->ignore_addr, NULL))
      return;
  
-+  //my_syslog(LOG_INFO, _("dns server=%s, trust type=%d"), inet_ntoa(serveraddr.in.sin_addr), server->trust);
-+  if ((server->trust==0||server->trust==1) && daemon->chnroutes_list && RCODE(header) == NOERROR) {
-+      int c = check_for_ignored_address(header, n, NULL, daemon->chnroutes_list);
-+      if (server->trust==0 && c==0) return;/* untrust dns sever, and got not in chnroutes address*/
-+      if (server->trust==1 && c==1) return;/* trust dns sever, and got in chnroutes address*/
-+  }
-+
++   //my_syslog(LOG_INFO, _("dns server=%s, trust type=%d"), inet_ntoa(serveraddr.in.sin_addr), server->trust);
++   if ((server->trust==0||server->trust==1) && daemon->chnroutes_list && RCODE(header) == NOERROR) {
++       int c = check_for_ignored_address(header, n, NULL, daemon->chnroutes_list);
++       if (server->trust==0 && c==0) return;/* untrust dns sever, and got not in chnroutes address*/
++       if (server->trust==1 && c==1) return;/* trust dns sever, and got in chnroutes address*/
++   }
++ 
    /* Note: if we send extra options in the EDNS0 header, we can't recreate
       the query from the reply. */
    if ((RCODE(header) == REFUSED || RCODE(header) == SERVFAIL) &&
 diff --git a/src/option.c b/src/option.c
-index 44b1dc5..ec014f9 100644
+index 1f698da..0671f6f 100644
 --- a/src/option.c
 +++ b/src/option.c
-@@ -160,6 +160,7 @@ struct myoption {
+@@ -157,6 +157,7 @@ struct myoption {
  #define LOPT_DHCPTTL       348
  #define LOPT_TFTP_MTU      349
  #define LOPT_REPLY_DELAY   350
@@ -120,7 +95,7 @@ index 44b1dc5..ec014f9 100644
  #define LOPT_RAPID_COMMIT  351
  #define LOPT_DUMPFILE      352
  #define LOPT_DUMPMASK      353
-@@ -201,6 +202,7 @@ static const struct myoption opts[] =
+@@ -202,6 +203,7 @@ static const struct myoption opts[] =
      { "bogus-priv", 0, 0, 'b' },
      { "bogus-nxdomain", 1, 0, 'B' },
      { "ignore-address", 1, 0, LOPT_IGNORE_ADDR },
@@ -128,7 +103,7 @@ index 44b1dc5..ec014f9 100644
      { "selfmx", 0, 0, 'e' },
      { "filterwin2k", 0, 0, 'f' },
      { "pid-file", 2, 0, 'x' },
-@@ -510,6 +512,7 @@ static struct {
+@@ -512,6 +514,7 @@ static struct {
    { LOPT_LOCAL_SERVICE, OPT_LOCAL_SERVICE, NULL, gettext_noop("Accept queries only from directly-connected networks."), NULL },
    { LOPT_LOOP_DETECT, OPT_LOOP_DETECT, NULL, gettext_noop("Detect and remove DNS forwarding loops."), NULL },
    { LOPT_IGNORE_ADDR, ARG_DUP, "<ipaddr>", gettext_noop("Ignore DNS responses containing ipaddr."), NULL }, 
@@ -136,7 +111,7 @@ index 44b1dc5..ec014f9 100644
    { LOPT_DHCPTTL, ARG_ONE, "<ttl>", gettext_noop("Set TTL in DNS responses with DHCP-derived addresses."), NULL }, 
    { LOPT_REPLY_DELAY, ARG_ONE, "<integer>", gettext_noop("Delay DHCP replies for at least number of seconds."), NULL },
    { LOPT_RAPID_COMMIT, OPT_RAPID_COMMIT, NULL, gettext_noop("Enables DHCPv4 Rapid Commit option."), NULL },
-@@ -774,16 +777,17 @@ static char *parse_mysockaddr(char *arg, union mysockaddr *addr)
+@@ -778,14 +781,15 @@ static char *parse_mysockaddr(char *arg, union mysockaddr *addr)
    return NULL;
  }
  
@@ -147,97 +122,94 @@ index 44b1dc5..ec014f9 100644
 -  char *portno, *source;
 +  char *portno, *source, *trust_type;
    char *interface_opt = NULL;
- #ifdef HAVE_IPV6
    int scope_index = 0;
    char *scope_id;
- #endif
    
 +  *trust = -1;/* init trust type to unknown */
    if (!arg || strlen(arg) == 0)
      {
        *flags |= SERV_NO_ADDR;
-@@ -795,6 +799,10 @@ char *parse_server(char *arg, union mysockaddr *addr, union mysockaddr *source_a
+@@ -797,6 +801,10 @@ char *parse_server(char *arg, union mysockaddr *addr, union mysockaddr *source_a
        (portno = split_chr(source, '#')) &&
        !atoi_check16(portno, &source_port))
      return _("bad port");
-+
-+  if ((trust_type = split_chr(arg, ',')) && /* is there a server#port,trust. */
-+      !atoi_check16(trust_type, trust))
-+    return _("bad trust type");
++	
++    if ((trust_type = split_chr(arg, ',')) && /* is there a server#port,trust. */
++       !atoi_check16(trust_type, trust))
++     return _("bad trust type");
    
    if ((portno = split_chr(arg, '#')) && /* is there a port no. */
        !atoi_check16(portno, &serv_port))
-@@ -1512,6 +1520,63 @@ void reset_option_bool(unsigned int opt)
-     daemon->options2 &= ~(1u << (opt - 32));
+@@ -1640,6 +1648,63 @@ static void server_list_free(struct server *list)
+     }
  }
  
-+int cmp_net_mask(const void *a, const void *b) {
-+  struct net_mask_t *neta = (struct net_mask_t *)a;
-+  struct net_mask_t *netb = (struct net_mask_t *)b;
-+  if (neta->net.s_addr == netb->net.s_addr)
-+    return 0;
-+  // TODO: pre ntohl
-+  if (ntohl(neta->net.s_addr) > ntohl(netb->net.s_addr))
-+    return 1;
-+  return -1;
-+}
-+
-+static int parse_chnroutes(const char *filename, struct net_list_t *chnroutes_list) {
-+  FILE *fp;
-+  char line_buf[32];
-+  char *line;
-+  size_t len = sizeof(line_buf);
-+  chnroutes_list->entries = 0;
-+  int i = 0;
-+
-+  fp = fopen(filename, "rb");
-+  if (fp == NULL) {
-+    return -1;
-+  }
-+  while ((line = fgets(line_buf, len, fp))) {
-+    chnroutes_list->entries++;
-+  }
-+
-+  chnroutes_list->nets = calloc(chnroutes_list->entries, sizeof(struct net_mask_t));
-+  if (0 != fseek(fp, 0, SEEK_SET)) {
-+    return -1;
-+  }
-+  while ((line = fgets(line_buf, len, fp))) {
-+    char *sp_pos;
-+    sp_pos = strchr(line, '\r');
-+    if (sp_pos) *sp_pos = 0;
-+    sp_pos = strchr(line, '\n');
-+    if (sp_pos) *sp_pos = 0;
-+    sp_pos = strchr(line, '/');
-+    if (sp_pos) {
-+      *sp_pos = 0;
-+      chnroutes_list->nets[i].mask = (1 << (32 - atoi(sp_pos + 1))) - 1;
-+    } else {
-+      chnroutes_list->nets[i].mask = UINT32_MAX;
-+    }
-+    if (0 == inet_aton(line, &chnroutes_list->nets[i].net)) {
-+      return (i+1);
-+    }
-+    i++;
-+  }
-+
-+  qsort(chnroutes_list->nets, chnroutes_list->entries, sizeof(struct net_mask_t),
-+        cmp_net_mask);
-+
-+  fclose(fp);
-+  return 0;
-+}
-+
++ int cmp_net_mask(const void *a, const void *b) {
++   struct net_mask_t *neta = (struct net_mask_t *)a;
++   struct net_mask_t *netb = (struct net_mask_t *)b;
++   if (neta->net.s_addr == netb->net.s_addr)
++     return 0;
++   // TODO: pre ntohl
++   if (ntohl(neta->net.s_addr) > ntohl(netb->net.s_addr))
++     return 1;
++   return -1;
++ }
++ 
++ static int parse_chnroutes(const char *filename, struct net_list_t *chnroutes_list) {
++   FILE *fp;
++   char line_buf[32];
++   char *line;
++   size_t len = sizeof(line_buf);
++   chnroutes_list->entries = 0;
++   int i = 0;
++ 
++   fp = fopen(filename, "rb");
++   if (fp == NULL) {
++     return -1;
++   }
++   while ((line = fgets(line_buf, len, fp))) {
++     chnroutes_list->entries++;
++   }
++ 
++   chnroutes_list->nets = calloc(chnroutes_list->entries, sizeof(struct net_mask_t));
++   if (0 != fseek(fp, 0, SEEK_SET)) {
++     return -1;
++   }
++   while ((line = fgets(line_buf, len, fp))) {
++     char *sp_pos;
++     sp_pos = strchr(line, '\r');
++     if (sp_pos) *sp_pos = 0;
++     sp_pos = strchr(line, '\n');
++     if (sp_pos) *sp_pos = 0;
++     sp_pos = strchr(line, '/');
++     if (sp_pos) {
++       *sp_pos = 0;
++       chnroutes_list->nets[i].mask = (1 << (32 - atoi(sp_pos + 1))) - 1;
++     } else {
++       chnroutes_list->nets[i].mask = UINT32_MAX;
++     }
++     if (0 == inet_aton(line, &chnroutes_list->nets[i].net)) {
++       return (i+1);
++     }
++     i++;
++   }
++ 
++   qsort(chnroutes_list->nets, chnroutes_list->entries, sizeof(struct net_mask_t),
++         cmp_net_mask);
++ 
++   fclose(fp);
++   return 0;
++ }
++ 
  static int one_opt(int option, char *arg, char *errstr, char *gen_err, int command_line, int servers_only)
  {      
    int i;
-@@ -2355,7 +2420,21 @@ static int one_opt(int option, char *arg, char *errstr, char *gen_err, int comma
+@@ -2499,6 +2564,20 @@ static int one_opt(int option, char *arg, char *errstr, char *gen_err, int comma
  	break;	
        }
        
--    case 'a':  /* --listen-address */
 +    case LOPT_CHNROUTES_FILE: /* --chnroutes-file */
-+    {
++   {
 +		struct net_list_t *crlist = opt_malloc(sizeof(struct net_list_t));
 +		int r = parse_chnroutes(opt_string_alloc(arg), crlist);
 +		if (r < 0)
@@ -249,21 +221,20 @@ index 44b1dc5..ec014f9 100644
 +		daemon->chnroutes_list = crlist;
 +
 +		break;
-+    }
-+     case 'a':  /* --listen-address */
++   }
+     case 'a':  /* --listen-address */
      case LOPT_AUTHPEER: /* --auth-peer */
        do {
- 	struct iname *new = opt_malloc(sizeof(struct iname));
-@@ -2468,7 +2547,7 @@ static int one_opt(int option, char *arg, char *errstr, char *gen_err, int comma
+@@ -2613,7 +2692,7 @@ static int one_opt(int option, char *arg, char *errstr, char *gen_err, int comma
  	  newlist->flags |= SERV_USE_RESOLV; /* treat in ordinary way */
  	else
  	  {
 -	    char *err = parse_server(arg, &newlist->addr, &newlist->source_addr, newlist->interface, &newlist->flags);
 +	    char *err = parse_server(arg, &newlist->addr, &newlist->source_addr, newlist->interface, &newlist->flags, &newlist->trust);
  	    if (err)
- 	      ret_err(err);
- 	  }
-@@ -2514,7 +2593,7 @@ static int one_opt(int option, char *arg, char *errstr, char *gen_err, int comma
+ 	      {
+ 	        server_list_free(newlist);
+@@ -2663,7 +2742,7 @@ static int one_opt(int option, char *arg, char *errstr, char *gen_err, int comma
  	else
  	  ret_err(gen_err);
   
@@ -273,67 +244,64 @@ index 44b1dc5..ec014f9 100644
  	if (string)
  	  ret_err(string);
 diff --git a/src/rfc1035.c b/src/rfc1035.c
-index 6290f22..c09aff0 100644
+index fefe63d..c67586a 100644
 --- a/src/rfc1035.c
 +++ b/src/rfc1035.c
-@@ -1072,7 +1072,37 @@ int check_for_bogus_wildcard(struct dns_header *header, size_t qlen, char *name,
+@@ -1116,7 +1116,37 @@ int check_for_bogus_wildcard(struct dns_header *header, size_t qlen, char *name,
    return 0;
  }
  
 -int check_for_ignored_address(struct dns_header *header, size_t qlen, struct bogus_addr *baddr)
-+static int test_ip_in_list(struct in_addr ip, const struct net_list_t *netlist) {
-+  // binary search
-+  int l = 0, r = netlist->entries - 1;
-+  int m, cmp;
-+  if (netlist->entries == 0)
-+    return 0;
-+  struct net_mask_t ip_net;
-+  ip_net.net = ip;
-+  while (l != r) {
-+    m = (l + r) / 2;
-+    cmp = cmp_net_mask(&ip_net, &netlist->nets[m]);
-+    if (cmp == -1) {
-+      if (r != m)
-+        r = m;
-+      else
-+        break;
-+    } else {
-+      if (l != m)
-+        l = m;
-+      else
-+        break;
-+    }
-+  }
-+  if ((ntohl(netlist->nets[l].net.s_addr) ^ ntohl(ip.s_addr)) &
-+      (UINT32_MAX ^ netlist->nets[l].mask)) {
-+    return 0;
-+  }
-+  return 1;
-+}
-+
-+int check_for_ignored_address(struct dns_header *header, size_t qlen, struct bogus_addr *baddr, const struct net_list_t *netlist)
++ static int test_ip_in_list(struct in_addr ip, const struct net_list_t *netlist) {
++   // binary search
++   int l = 0, r = netlist->entries - 1;
++   int m, cmp;
++   if (netlist->entries == 0)
++     return 0;
++   struct net_mask_t ip_net;
++   ip_net.net = ip;
++   while (l != r) {
++     m = (l + r) / 2;
++     cmp = cmp_net_mask(&ip_net, &netlist->nets[m]);
++     if (cmp == -1) {
++       if (r != m)
++         r = m;
++       else
++         break;
++     } else {
++       if (l != m)
++         l = m;
++       else
++         break;
++     }
++   }
++   if ((ntohl(netlist->nets[l].net.s_addr) ^ ntohl(ip.s_addr)) &
++       (UINT32_MAX ^ netlist->nets[l].mask)) {
++     return 0;
++   }
++   return 1;
++ }
++ 
++ int check_for_ignored_address(struct dns_header *header, size_t qlen, struct bogus_addr *baddr, const struct net_list_t *netlist)
  {
    unsigned char *p;
    int i, qtype, qclass, rdlen;
-@@ -1097,9 +1127,18 @@ int check_for_ignored_address(struct dns_header *header, size_t qlen, struct bog
+@@ -1141,9 +1171,18 @@ int check_for_ignored_address(struct dns_header *header, size_t qlen, struct bog
  	  if (!CHECK_LEN(header, p, qlen, INADDRSZ))
  	    return 0;
  	  
-+	  if (baddr!=NULL)
++	  if (baddr!=NULL)    
  	  for (baddrp = baddr; baddrp; baddrp = baddrp->next)
  	    if (memcmp(&baddrp->addr, p, INADDRSZ) == 0)
  	      return 1;
-+
-+	  if (netlist!=NULL) {
-+		  struct in_addr addr;
-+		  memcpy(&addr, p, INADDRSZ);
-+		  int c = test_ip_in_list(addr, netlist);
-+		  //my_syslog(LOG_INFO, _("resolved ip = %s, %s chnroutes"), inet_ntoa(addr), (c?"in":"not in"));
-+		  if (c) return 1;
-+	  }
++ 
++ 	  if (netlist!=NULL) {
++ 		  struct in_addr addr;
++ 		  memcpy(&addr, p, INADDRSZ);
++ 		  int c = test_ip_in_list(addr, netlist);
++ 		  //my_syslog(LOG_INFO, _("resolved ip = %s, %s chnroutes"), inet_ntoa(addr), (c?"in":"not in"));
++ 		  if (c) return 1;
++ 	  }
  	}
        
        if (!ADD_RDLEN(header, p, qlen, rdlen))
--- 
-2.17.1
-

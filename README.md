@@ -7,7 +7,7 @@ Add dnsmasq for support chnroute file.
 ```bash
 cd openwrt
 cd package/network/services/dnsmasq/patches
-wget https://raw.githubusercontent.com/muziling/dnsmasq-chnroute/0000-Add-feature-to-support-chnroutes.patch --no-check-certificate
+wget https://raw.githubusercontent.com/muziling/dnsmasq-chnroute/master/0000-Add-feature-to-support-chnroutes.patch --no-check-certificate
 cd ../../../../../
 
 make package/network/services/dnsmasq/clean
